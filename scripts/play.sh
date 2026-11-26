@@ -4,10 +4,13 @@
 #   XWIN_ACCEPT_LICENSE=1 cargo xwin build --locked --profile diag -p victory \
 #       --features diagnostics --target x86_64-pc-windows-msvc
 # Usage: scripts/play.sh [--safe] [--ray-tracing] [--fsr4k quality|balanced|performance]
-#                        [--build diag|release] [--exe <path>] [--gamescope] [VAR=value ...]
+#                        [--build diag|release] [--exe <path>] [--gamescope] [--auto-start] [VAR=value ...]
 #                        [-- <other victory command, e.g. config, or shaders <path>>]
 # PROTON selects the Proton folder (default: Proton - Experimental);
 # VICTORY_PREFIX the Wine prefix (default: ~/.local/share/victory/prefix).
+# --auto-start  presses Enter (the pad's A) 15 s in, past the start screen,
+#               for runs left alone; VICTORY_KEYS
+#               (diagnostics builds) says other keys and times.
 # --gamescope   fullscreen in gamescope, the title's 16:9 picture kept 16:9 (bars
 #               at the sides on a 21:9 screen); GAMESCOPE_SCREEN=3440x1440 names
 #               the screen's size (needed with several screens).
@@ -16,7 +19,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-build=diag safe= rt= fsr= exe= gamescope= more=() cmd=()
+build=diag safe= rt= fsr= exe= gamescope= auto= more=() cmd=()
 while (($#)); do
     case $1 in
         --safe) safe=1 ;;
@@ -25,6 +28,7 @@ while (($#)); do
         --build) build=$2; shift ;;
         --exe) exe=$2; shift ;;
         --gamescope) gamescope=1 ;;
+        --auto-start) auto=1 ;;
         --) shift; cmd=("$@"); break ;;
         *=*) more+=("$1") ;;
         *) echo "Unknown argument $1"; exit 1 ;;
@@ -64,7 +68,12 @@ if [[ -n $safe ]]; then
     export VICTORY_UNDER_WIDE=0 VICTORY_LAND_ECHO=0
 else
     export VICTORY_THIN=1 VICTORY_JOIN_PARTS=8 VICTORY_UPLOAD_AHEAD=1
+    # Renderer patches 1, 2, 6 and 7 (README): under Wine they also save most
+    # of its write guards' cost and the scan of the view heap (the opening
+    # cutscene: 1,700 to 1,170 ms a frame).
+    export VICTORY_PORT_CONSTANTS=1 VICTORY_PORT_DESCRIPTORS=1 VICTORY_PORT_GUARD=1 VICTORY_PORT_JOURNAL=1
 fi
+[[ -n $auto ]] && export VICTORY_KEYS=15:Enter
 [[ -n $rt ]] && export VICTORY_BVH_BUILDER=1
 [[ -n $fsr ]] && export VICTORY_FSR_4K=$fsr
 for kv in "${inherited[@]}" "${more[@]}"; do export "${kv?}"; done
@@ -97,6 +106,11 @@ if [[ -n $vkd3d_libs ]]; then
         cmp -s "$from" "$to" || { cp "$from" "$to" && echo "vkd3d-proton: $dll.dll from $vkd3d_libs"; }
     done
 fi
+# NVIDIA's shader cache on disk: Steam's launcher raises its size limit (1 GB
+# by default, under what this title's pipelines take) and keeps it from being
+# cleaned up; so does this.
+export __GL_SHADER_DISK_CACHE=1 __GL_SHADER_DISK_CACHE_SIZE=${__GL_SHADER_DISK_CACHE_SIZE:-21474836480} \
+    __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
 # Proton's own wine, not its launcher, so the log stays in this terminal.
 export WINEPREFIX=$STEAM_COMPAT_DATA_PATH/pfx WINEDEBUG=${WINEDEBUG:-fixme-all}   # errors kept: a crash says where
 # vkd3d-proton's pipeline cache (game-derived) goes beside the prefix, not into

@@ -583,7 +583,7 @@ pub(crate) fn pipeline(
 pub(crate) fn save(now: bool) {
     static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
     const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(20);
-    let (Some(dir), Some(library)) = (DIR.get(), library()) else { return };
+    let Some(dir) = DIR.get() else { return };
     {
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
         if !now && last.is_some_and(|t| t.elapsed() < SAVE_EVERY) {
@@ -591,6 +591,22 @@ pub(crate) fn save(now: bool) {
         }
         *last = Some(std::time::Instant::now());
     }
+    let Some(library) = library() else {
+        // A host without pipeline libraries (vkd3d-proton) keeps no
+        // pipelines of ours, but the driver's cache on disk does: the list
+        // of those runs drew with still lets the next run start them early
+        // and `victory warm --used` make them ahead of it.
+        if USED_CHANGED.swap(false, Ordering::Relaxed) {
+            let used: Vec<String> = used().iter().flatten().cloned().collect();
+            let written = std::fs::create_dir_all(dir)
+                .and_then(|()| write_atomically(&dir.join(EARLY_FILE), used.join("\n").as_bytes()));
+            match written {
+                Ok(()) => tracing::info!(early = used.len(), "early list saved (no host pipeline library)"),
+                Err(e) => tracing::warn!(error = %e, "early list not saved"),
+            }
+        }
+        return;
+    };
     let _saving = crate::timeline::span("pipeline: save the library and early list");
     if let Err(e) = std::fs::create_dir_all(dir) {
         tracing::warn!(error = %e, "host pipeline library not saved");
