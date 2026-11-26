@@ -64,6 +64,9 @@ export VICTORY_TEXTURE_NO_WAIT=1 VICTORY_RELAY=2 VICTORY_WIDE_BACK=1 VICTORY_CAR
     VICTORY_JOIN_COPIES=1 VICTORY_INDIRECT_WINDOW=1 VICTORY_RELAY_COPY=1 VICTORY_CARD_STEPS=2 \
     VICTORY_INDIRECT_BATCH=2 VICTORY_MAP_THREADS=1 VICTORY_TITLE_PRIORITIES=0 VICTORY_CARD_AWAKE=1 \
     VICTORY_SHOW_AFTER=1 VICTORY_AMBIENT=0.8 VICTORY_D3D12_DRED=light
+# No walk of the whole address space for the memory line (diagnostics): its
+# 100,000 questions to Wine hold up every mapping call meanwhile.
+export VICTORY_MEMORY_MAP=0
 # The pipelines the title creates are written down, so that
 # `scripts/play.sh -- warm --used` can make them ahead of the next run.
 export VICTORY_PIPELINE_BOOK=1
