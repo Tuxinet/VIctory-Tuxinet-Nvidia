@@ -2072,7 +2072,52 @@ fn placeholder(block: usize) -> bool {
             std::ptr::null_mut(),
         )
     };
+    // Wine answers no MemoryRegionInformationEx: there the runtime's own
+    // record says it ([`title_placeholder_reserved`]).
+    const STATUS_INVALID_INFO_CLASS: i32 = 0xc000_0003_u32 as i32;
+    if status == STATUS_INVALID_INFO_CLASS {
+        return reserved_placeholder(block * BLOCK);
+    }
     status >= 0 && region.region_type & PLACEHOLDER_RESERVATION != 0
+}
+
+/// The title's placeholder reservations as the runtime made them, start to
+/// end. Wine does not tell placeholders apart (no MemoryRegionInformationEx,
+/// no placeholder bit in MemoryRegionInformation), so without this no hole
+/// was ever known for one ([`known_holes`]): each asking put a question to
+/// Wine for each hole of each range, some 100,000 a second under Wine's one
+/// lock for memory (the opening cutscene: up to five threads' worth of
+/// waiting for it).
+static PLACEHOLDERS: std::sync::RwLock<std::collections::BTreeMap<usize, usize>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// The runtime reserved `[at, at + len)` as a placeholder for the title.
+pub fn title_placeholder_reserved(at: usize, len: usize) {
+    if len != 0 {
+        PLACEHOLDERS.write().unwrap_or_else(|e| e.into_inner()).insert(at, at.saturating_add(len));
+    }
+}
+
+/// Whether `at` lies in a placeholder reservation the runtime made.
+fn reserved_placeholder(at: usize) -> bool {
+    let placeholders = PLACEHOLDERS.read().unwrap_or_else(|e| e.into_inner());
+    placeholders.range(..=at).next_back().is_some_and(|(_, &end)| at < end)
+}
+
+/// The title freed `[at, at + len)` (with no length, the allocation at
+/// `at`): the reservations it touches are no longer known for placeholders
+/// (a part freed loses the whole; the next asking asks again).
+fn placeholders_freed(at: usize, len: usize) {
+    let end = if len == 0 { at + 1 } else { at.saturating_add(len) };
+    let mut placeholders = PLACEHOLDERS.write().unwrap_or_else(|e| e.into_inner());
+    let gone: Vec<usize> = placeholders
+        .range(..end)
+        .filter(|&(_, &e)| e > at)
+        .map(|(&start, _)| start)
+        .collect();
+    for start in gone {
+        placeholders.remove(&start);
+    }
 }
 
 /// The runtime gave the title memory at `[at, at + len)`, allocated or
@@ -3657,6 +3702,7 @@ pub fn title_memory_unmapping(at: usize, len: usize) {
 /// was noted of its blocks (guarded, clean, absent) would be taken for true
 /// of the next memory at the address.
 pub fn title_memory_freed(at: usize, len: usize) {
+    placeholders_freed(at, len);
     if len != 0 {
         forget_views(at / BLOCK, at.saturating_add(len).div_ceil(BLOCK));
     } else if VIEWS.any(at / BLOCK, at / BLOCK + 1) {
@@ -5960,3 +6006,4 @@ mod rearm_tests {
         unsafe { VirtualFree(page as *mut _, 0, MEM_RELEASE) };
     }
 }
+
