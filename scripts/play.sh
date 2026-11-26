@@ -4,13 +4,15 @@
 #   XWIN_ACCEPT_LICENSE=1 cargo xwin build --locked --profile diag -p victory \
 #       --features diagnostics --target x86_64-pc-windows-msvc
 # Usage: scripts/play.sh [--safe] [--ray-tracing] [--fsr4k quality|balanced|performance]
-#                        [--build diag|release] [--exe <path>] [--gamescope] [--auto-start] [VAR=value ...]
+#                        [--build diag|release] [--exe <path>] [--gamescope] [--auto-start] [--console series-x|series-s] [VAR=value ...]
 #                        [-- <other victory command, e.g. config, or shaders <path>>]
 # PROTON selects the Proton folder (default: Proton - Experimental);
 # VICTORY_PREFIX the Wine prefix (default: ~/.local/share/victory/prefix).
 # --auto-start  presses Enter (the pad's A) 15 s in, past the start screen,
 #               for runs left alone; VICTORY_KEYS
 #               (diagnostics builds) says other keys and times.
+# --console     the console the title sees: series-x (default) or series-s
+#               (1080p, cheaper; the README's measurements are with it).
 # --gamescope   fullscreen in gamescope, the title's 16:9 picture kept 16:9 (bars
 #               at the sides on a 21:9 screen); GAMESCOPE_SCREEN=3440x1440 names
 #               the screen's size (needed with several screens).
@@ -19,7 +21,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-build=diag safe= rt= fsr= exe= gamescope= auto= more=() cmd=()
+build=diag safe= rt= fsr= exe= gamescope= auto= console=series-x more=() cmd=()
 while (($#)); do
     case $1 in
         --safe) safe=1 ;;
@@ -29,6 +31,7 @@ while (($#)); do
         --exe) exe=$2; shift ;;
         --gamescope) gamescope=1 ;;
         --auto-start) auto=1 ;;
+        --console) console=$2; shift ;;
         --) shift; cmd=("$@"); break ;;
         *=*) more+=("$1") ;;
         *) echo "Unknown argument $1"; exit 1 ;;
@@ -156,4 +159,4 @@ if [[ ${VICTORY_TERMINAL:-} == all ]]; then
 else
     exec > >(tee "$log" | grep --line-buffered -aE 'WARN|ERROR|err:|Exception|Unhandled|panicked|frame presented') 2>&1
 fi
-exec "${wrap[@]}" "$proton_dir/files/bin/wine" "$victory" run "$(winpath "$exe")" --execute
+exec "${wrap[@]}" "$proton_dir/files/bin/wine" "$victory" run "$(winpath "$exe")" --execute --console "$console"
