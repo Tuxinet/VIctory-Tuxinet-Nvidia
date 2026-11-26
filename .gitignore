@@ -24,6 +24,9 @@
 /extracted/
 /cache/
 /out/
+# vkd3d-proton's pipeline cache, compiled from the title's shaders
+# (scripts/play.sh keeps it in the Wine prefix instead).
+/vkd3d-proton.cache*
 
 # Executables, libraries, symbols
 *.exe

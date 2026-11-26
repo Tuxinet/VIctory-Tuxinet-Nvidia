@@ -84,6 +84,10 @@ impl Pending {
                 SKIPPED_BAD.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(key = self.key, shaders = ?self.shaders, "not made: the driver's compiler crashed on it before");
                 None
+            } else if self.shaders.iter().any(|s| is_skipped_shader(&s.hash)) {
+                SKIPPED_BAD.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(key = self.key, shaders = ?self.shaders, "not made: a shader of it is in VICTORY_SKIP_SHADERS");
+                None
             } else {
                 let _building = crate::timeline::span("pipeline: build a host pipeline");
                 let began = Instant::now();
@@ -130,6 +134,27 @@ fn bad_keys<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R
 
 fn is_bad_key(key: &str) -> bool {
     bad_keys(|keys| keys.contains(key))
+}
+
+/// `VICTORY_SKIP_SHADERS=<hash>,<hash>`: pipelines with any of these shaders
+/// (the 16 hex digits a run's log names them by) are not made, as the bad
+/// keys are not. For a compiler crash the guard does not catch: under Wine,
+/// NVIDIA's Linux compiler trapped in vkCreateComputePipelines on the invalid
+/// SPIR-V that the dxil-spirv in Proton Experimental's vkd3d-proton
+/// (563eb6ca) made of some programs, and the guard's handler did not see it.
+fn is_skipped_shader(hash: &str) -> bool {
+    static SKIPPED: OnceLock<Vec<String>> = OnceLock::new();
+    SKIPPED
+        .get_or_init(|| {
+            std::env::var("VICTORY_SKIP_SHADERS")
+                .unwrap_or_default()
+                .split([',', ';', ' '])
+                .map(|h| h.trim().to_ascii_lowercase())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
+        .iter()
+        .any(|h| h == hash)
 }
 
 /// Whether the driver's compiler crashes are caught
@@ -232,10 +257,16 @@ unsafe extern "system" fn compiler_crashed(
 ) -> i32 {
     use windows_sys::Win32::System::Threading::{SetEvent, Sleep};
     const ACCESS_VIOLATION: i32 = 0xc000_0005_u32 as i32;
+    // NVIDIA's Linux driver under Wine (vkd3d-proton): its compiler traps
+    // in vkCreate*Pipelines on invalid SPIR-V, which Wine raises as this.
+    const ILLEGAL_INSTRUCTION: i32 = 0xc000_001d_u32 as i32;
     const CONTINUE_SEARCH: i32 = 0;
     // SAFETY: the system passes a live record.
     let record = unsafe { &*(*info).ExceptionRecord };
-    if record.ExceptionCode != ACCESS_VIOLATION || record.NumberParameters < 2 || record.ExceptionInformation[1] >= 0x10000 {
+    let first_pages = record.ExceptionCode == ACCESS_VIOLATION
+        && record.NumberParameters >= 2
+        && record.ExceptionInformation[1] < 0x10000;
+    if !first_pages && record.ExceptionCode != ILLEGAL_INSTRUCTION {
         return CONTINUE_SEARCH;
     }
     if !COMPILING.try_with(|c| c.get()).unwrap_or(false) {
