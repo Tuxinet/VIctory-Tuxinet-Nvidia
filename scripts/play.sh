@@ -103,7 +103,14 @@ export WINEPREFIX=$STEAM_COMPAT_DATA_PATH/pfx WINEDEBUG=${WINEDEBUG:-fixme-all} 
 # the repository this runs from.
 export VKD3D_SHADER_CACHE_PATH=${VKD3D_SHADER_CACHE_PATH:-$(winpath "$STEAM_COMPAT_DATA_PATH")}
 # What Proton's launcher would set: the prefix's vkd3d-proton and DXVK, not Wine's own.
-export WINEDLLOVERRIDES="d3d12,d3d12core,dxgi,d3d11,d3d10core,d3d9=n,b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+# And Microsoft's d3dcompiler_47 (`winetricks d3dcompiler_47`): Wine's cannot
+# compile the layer's own helper shaders (the indirect argument clamp among
+# them; without it every indirect draw is dropped).
+export WINEDLLOVERRIDES="d3d12,d3d12core,dxgi,d3d11,d3d10core,d3d9,d3dcompiler_47=n,b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+if grep -qa "Wine builtin DLL" "$WINEPREFIX/drive_c/windows/system32/d3dcompiler_47.dll" 2>/dev/null; then
+    echo "The prefix has Wine's d3dcompiler_47: most of the picture will be missing. Install Microsoft's with"
+    echo "  WINEPREFIX=$WINEPREFIX WINE='$proton_dir/files/bin/wine' winetricks d3dcompiler_47"
+fi
 cd "$root"   # victory.toml is looked for here
 if ((${#cmd[@]})); then
     exec "$proton_dir/files/bin/wine" "$victory" "${cmd[@]}"
