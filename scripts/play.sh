@@ -11,7 +11,8 @@
 # --gamescope   fullscreen in gamescope, the title's 16:9 picture kept 16:9 (bars
 #               at the sides on a 21:9 screen); GAMESCOPE_SCREEN=3440x1440 names
 #               the screen's size (needed with several screens).
-# Each run's log is also written to ~/.local/share/victory/logs.
+# Each run's whole log is written to ~/.local/share/victory/logs; the terminal
+# shows warnings and errors only (VICTORY_TERMINAL=all: everything).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,6 +57,9 @@ export VICTORY_TEXTURE_NO_WAIT=1 VICTORY_RELAY=2 VICTORY_WIDE_BACK=1 VICTORY_CAR
     VICTORY_JOIN_COPIES=1 VICTORY_INDIRECT_WINDOW=1 VICTORY_RELAY_COPY=1 VICTORY_CARD_STEPS=2 \
     VICTORY_INDIRECT_BATCH=2 VICTORY_MAP_THREADS=1 VICTORY_TITLE_PRIORITIES=0 VICTORY_CARD_AWAKE=1 \
     VICTORY_SHOW_AFTER=1 VICTORY_AMBIENT=0.8 VICTORY_D3D12_DRED=light
+# The pipelines the title creates are written down, so that
+# `scripts/play.sh -- warm --used` can make them ahead of the next run.
+export VICTORY_PIPELINE_BOOK=1
 if [[ -n $safe ]]; then
     export VICTORY_UNDER_WIDE=0 VICTORY_LAND_ECHO=0
 else
@@ -124,5 +128,11 @@ logs=$HOME/.local/share/victory/logs
 mkdir -p "$logs"
 log=$logs/play-$(date +%Y%m%d-%H%M%S).log
 echo "Log: $log"
-exec > >(tee "$log") 2>&1
+# The whole log goes to the file; the terminal gets warnings, errors and the
+# frame-rate lines unless VICTORY_TERMINAL=all.
+if [[ ${VICTORY_TERMINAL:-} == all ]]; then
+    exec > >(tee "$log") 2>&1
+else
+    exec > >(tee "$log" | grep --line-buffered -aE 'WARN|ERROR|err:|Exception|Unhandled|panicked|frame presented') 2>&1
+fi
 exec "${wrap[@]}" "$proton_dir/files/bin/wine" "$victory" run "$(winpath "$exe")" --execute
