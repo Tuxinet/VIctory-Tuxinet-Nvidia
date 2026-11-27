@@ -113,6 +113,20 @@ mod texback;
 #[cfg(windows)]
 pub use host::on_failure;
 
+/// Whether we run under Wine (its ntdll exports `wine_get_version`).
+#[cfg(windows)]
+pub(crate) fn on_wine() -> bool {
+    static WINE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WINE.get_or_init(|| {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        // SAFETY: plain lookups in ntdll, always loaded.
+        unsafe {
+            let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr().cast());
+            !ntdll.is_null() && GetProcAddress(ntdll, c"wine_get_version".as_ptr().cast()).is_some()
+        }
+    })
+}
+
 /// Whether `switch` is on now, if it is one of those `VICTORY_AB` turns on and
 /// off while the title runs (`ab`).
 #[cfg(all(windows, feature = "diagnostics"))]

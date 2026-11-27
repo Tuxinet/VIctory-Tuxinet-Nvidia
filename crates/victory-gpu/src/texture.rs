@@ -1715,6 +1715,21 @@ fn readable(at: usize, len: usize, all: bool) -> (usize, usize) {
     let mut there = 0;
     // SAFETY: plain data.
     let mut info: [PSAPI_WORKING_SET_EX_INFORMATION; 256] = unsafe { std::mem::zeroed() };
+    // Under Wine the question holds the process's memory lock and reads
+    // /proc/self/pagemap a page at a time meanwhile: the title's mapping
+    // calls, faults and protection changes wait behind it (5,000 waits in 6
+    // s of the world). A page that is there reads without that lock.
+    if crate::on_wine() {
+        for page in first..=last {
+            let mut byte = [0u8];
+            if crate::host::read_into((page * KERNEL_PAGE) as *const u8, &mut byte) {
+                there += 1;
+            } else if all {
+                return (there, of);
+            }
+        }
+        return (there, of);
+    }
     let mut page = first;
     while page <= last {
         let n = (last - page + 1).min(info.len());
