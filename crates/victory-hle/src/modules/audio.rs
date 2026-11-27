@@ -704,6 +704,17 @@ fn wake_decoder() {
             std::thread::Builder::new()
                 .name("victory XMA decoder".into())
                 .spawn(|| {
+                    // It stands in for the console's decoder, which nothing
+                    // takes turns with: above the title's own threads, which
+                    // under Wine (with thread priorities applied) left it
+                    // late behind theirs and the sound stuttering.
+                    // SAFETY: plain calls on this thread.
+                    unsafe {
+                        use windows_sys::Win32::System::Threading::{
+                            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+                        };
+                        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+                    }
                     loop {
                         xma().pump();
                         // A 256-byte output block lasts 2.7 ms at 48 kHz mono.
