@@ -6,7 +6,8 @@
 # Usage: scripts/play.sh [--safe] [--ray-tracing] [--fsr4k quality|balanced|performance]
 #                        [--build diag|release] [--exe <path>] [--gamescope] [--auto-start] [--console series-x|series-s] [VAR=value ...]
 #                        [-- <other victory command, e.g. config, or shaders <path>>]
-# PROTON selects the Proton folder (default: Proton - Experimental);
+# PROTON selects the Proton folder (default: the patched copy that
+# scripts/wine/build-ntdll.sh makes, else Proton - Experimental);
 # VICTORY_PREFIX the Wine prefix (default: ~/.local/share/victory/prefix).
 # --auto-start  presses Enter (the pad's A) 15 s in, past the start screen,
 #               for runs left alone; VICTORY_KEYS
@@ -49,7 +50,9 @@ fi
 victory=$root/target/x86_64-pc-windows-msvc/$build/victory.exe
 [[ -f $victory ]] || { echo "No $victory. Build it first (see the top of this script)."; exit 1; }
 
-proton_dir=${PROTON:-$HOME/.steam/steam/steamapps/common/Proton - Experimental}
+patched=$HOME/.local/share/victory/proton-patched
+if [[ -z ${PROTON:-} && -x $patched/proton ]]; then proton_dir=$patched
+else proton_dir=${PROTON:-$HOME/.steam/steam/steamapps/common/Proton - Experimental}; fi
 [[ -x $proton_dir/proton ]] || { echo "No Proton at $proton_dir (set PROTON)."; exit 1; }
 
 # Same settings as play.ps1. Unlike play.ps1, VICTORY_* set in the shell are
@@ -117,6 +120,9 @@ fi
 # cleaned up; so does this.
 export __GL_SHADER_DISK_CACHE=1 __GL_SHADER_DISK_CACHE_SIZE=${__GL_SHADER_DISK_CACHE_SIZE:-21474836480} \
     __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
+# The patched ntdll (scripts/wine): no server round trip for the title's page
+# views. A map took 150 us in the world, 24 without it; Proton's own ignores it.
+export WINE_VICTORY_NO_VIEW_SERVER=${WINE_VICTORY_NO_VIEW_SERVER:-1}
 # Proton's own wine, not its launcher, so the log stays in this terminal.
 export WINEPREFIX=$STEAM_COMPAT_DATA_PATH/pfx WINEDEBUG=${WINEDEBUG:-fixme-all}   # errors kept: a crash says where
 # vkd3d-proton's pipeline cache (game-derived) goes beside the prefix, not into

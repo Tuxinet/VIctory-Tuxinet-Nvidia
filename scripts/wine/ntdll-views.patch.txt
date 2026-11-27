@@ -1,0 +1,141 @@
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 3efac71..c7ba7d9 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -295,6 +295,51 @@ static const BYTE VIRTUAL_Win32Flags[16] =
+ static struct wine_rb_tree views_tree;
+ static pthread_mutex_t virtual_mutex;
+ 
++/* VIctory patch: the server is told of section views outside virtual_mutex.
++ * Mapping and unmapping a view used to hold virtual_mutex across a server
++ * round trip (map_view, unmap_view), and every protection change, fault and
++ * query of every thread waited behind it. The server's record of a non-image
++ * view is bookkeeping only; tickets taken under virtual_mutex keep its
++ * requests in the order of the changes they describe. */
++static pthread_mutex_t view_server_mutex = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t view_server_cond = PTHREAD_COND_INITIALIZER;
++static unsigned int view_server_next, view_server_served;
++
++/* virtual_mutex held */
++static unsigned int view_server_ticket(void)
++{
++    return view_server_next++;
++}
++
++static void view_server_wait( unsigned int ticket )
++{
++    pthread_mutex_lock( &view_server_mutex );
++    while (view_server_served != ticket) pthread_cond_wait( &view_server_cond, &view_server_mutex );
++    pthread_mutex_unlock( &view_server_mutex );
++}
++
++/* VIctory patch: WINE_VICTORY_NO_VIEW_SERVER=1 leaves the server out of
++ * non-image section views altogether (map and unmap alike): its record of
++ * them is bookkeeping, and the round trip was most of what a map costs. */
++static BOOL no_view_server(void)
++{
++    static int no = -1;
++    if (no < 0)
++    {
++        const char *v = getenv( "WINE_VICTORY_NO_VIEW_SERVER" );
++        no = v && v[0] == '1';
++    }
++    return no;
++}
++
++static void view_server_done(void)
++{
++    pthread_mutex_lock( &view_server_mutex );
++    view_server_served++;
++    pthread_cond_broadcast( &view_server_cond );
++    pthread_mutex_unlock( &view_server_mutex );
++}
++
+ static const UINT page_shift = 12;
+ static const UINT_PTR page_mask = 0xfff;
+ static const UINT_PTR granularity_mask = 0xffff;
+@@ -3805,19 +3850,47 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+     res = map_file_into_view( view, unix_handle, 0, size, offset.QuadPart, vprot, needs_close );
+     if (res == STATUS_SUCCESS)
+     {
++        void *view_base = view->base;
++        unsigned int ticket;
++
+         /* file mappings must always be accessible */
+         mprotect_range( view->base, view->size, VPROT_COMMITTED, 0 );
+ 
++        if (no_view_server())
++        {
++            *addr_ptr = view_base;
++            *size_ptr = size;
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            if (needs_close) close( unix_handle );
++            return STATUS_SUCCESS;
++        }
++        /* the server is told outside virtual_mutex (signals stay blocked) */
++        ticket = view_server_ticket();
++        mutex_unlock( &virtual_mutex );
++        view_server_wait( ticket );
+         SERVER_START_REQ( map_view )
+         {
+             req->mapping = wine_server_obj_handle( handle );
+             req->access  = access;
+-            req->base    = wine_server_client_ptr( view->base );
++            req->base    = wine_server_client_ptr( view_base );
+             req->size    = size;
+             req->start   = offset.QuadPart;
+             res = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        view_server_done();
++        if (NT_SUCCESS(res))
++        {
++            /* not taken again: a contended lock would be waited for twice */
++            *addr_ptr = view_base;
++            *size_ptr = size;
++            pthread_sigmask( SIG_SETMASK, &sigset, NULL );
++            if (needs_close) close( unix_handle );
++            return res;
++        }
++        mutex_lock( &virtual_mutex );
++        if ((view = find_view( view_base, 0 )) && view->base == view_base) delete_view( view );
++        goto done;
+     }
+     else ERR( "mapping %p %lx %s failed\n", view->base, size, wine_dbgstr_longlong(offset.QuadPart) );
+ 
+@@ -6916,6 +6989,35 @@ static NTSTATUS unmap_view_of_section( HANDLE process, PVOID addr, ULONG flags )
+         }
+     }
+ 
++    if (!(view->protect & (SEC_IMAGE | VPROT_SYSTEM)))
++    {
++        /* the server is told outside virtual_mutex, after the view is gone
++         * here (its unmap_view does not fail) */
++        void *view_base = view->base;
++        unsigned int ticket;
++
++        if (flags & MEM_PRESERVE_PLACEHOLDER) free_pages_preserve_placeholder( view, view->base, view->size );
++        else delete_view( view );
++        if (no_view_server())
++        {
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            return STATUS_SUCCESS;
++        }
++        ticket = view_server_ticket();
++        mutex_unlock( &virtual_mutex );
++        view_server_wait( ticket );
++        SERVER_START_REQ( unmap_view )
++        {
++            req->base = wine_server_client_ptr( view_base );
++            status = wine_server_call( req );
++        }
++        SERVER_END_REQ;
++        view_server_done();
++        if (status) FIXME( "failed to unmap %p %x\n", view_base, status );
++        pthread_sigmask( SIG_SETMASK, &sigset, NULL );
++        return STATUS_SUCCESS;
++    }
++
+     SERVER_START_REQ( unmap_view )
+     {
+         req->base = wine_server_client_ptr( view->base );
