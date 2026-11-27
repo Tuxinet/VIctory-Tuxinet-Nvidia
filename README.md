@@ -3,6 +3,89 @@
 A fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer
 that runs an Xbox Series title natively on Windows from files the user supplies.
 
+## This fork: Linux and NVIDIA (2026-11-27)
+
+[VIctory-Tuxinet-Nvidia](https://github.com/Tuxinet/VIctory-Tuxinet-Nvidia),
+branch `linux-nvidia`, runs the layer on Linux under Proton, on an NVIDIA card.
+It follows upstream's `a-publier` (merged up to `4eb6cfd`) and adds the Linux
+launcher, a patched Wine `ntdll`, and fixes for problems that show up under
+Wine only.
+
+**What it runs on:** Arch Linux (kernel 7.2.9-zen), an AMD Ryzen 9 5900XT
+(16 cores, 32 threads), 96 GB of RAM, and a GeForce RTX 3090 (24 GB, driver
+615.78.08). The software is Proton Experimental 11.0 (20261105c), with
+[vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) built from
+its master branch (`71cae091`).
+
+**Where it stands:** the title runs, from the opening cutscene into the
+prison, and renders. Measured with the Series S profile, ray tracing off:
+
+| | |
+|---|---|
+| Prison, once streaming has settled | about 110-150 ms a frame (7-9 fps) |
+| The first 1.5-2 minutes after the world appears (streaming) | 250-700 ms a frame, with stalls of several seconds |
+| Opening cutscene | about 8 fps, by eye |
+| The first working run, before the fixes below | about 1,700 ms a frame |
+| Windows on the same PC, for comparison | 25-30 fps |
+
+The card is busy about 44 ms of a settled frame. The rest is the layer's
+submitting thread and the title's streaming, which under Wine still wait on
+memory calls that cost far more than on Windows.
+
+**What the fork changes for Linux:**
+- `scripts/play.sh`, the counterpart of `play.ps1`. It runs Proton's Wine
+  directly, uses the prefix's own vkd3d-proton, and has `--gamescope`,
+  `--console series-s` and `--auto-start` (presses Enter 15 s in).
+- A patched `ntdll.so` for Proton (`scripts/wine/`). Under Wine, every map
+  and unmap of the title's 64 KiB pages held the process-wide memory lock
+  across a wineserver round trip, and the title maps one page per call,
+  10,000-25,000 of them a second while streaming. With the patch, a map
+  takes 24 µs instead of 150, and an unmap 16 µs instead of 170. `play.sh`
+  uses the patched copy when it has been built.
+- The layer works around Wine's gaps. Wine has no `MemoryRegionInformationEx`,
+  so the layer records the title's placeholders itself. Under Wine it also
+  reads a page instead of asking `QueryWorkingSetEx` (Wine answers that one
+  under the memory lock), and skips the diagnostics walk of the whole address
+  space.
+- The XMA audio decoder runs at time-critical priority.
+
+**Known issues:**
+- **Choppy audio with the patched Wine's fast path on.** That fast path is
+  `WINE_VICTORY_NO_VIEW_SERVER=1`, which `play.sh` sets. With
+  `WINE_VICTORY_NO_VIEW_SERVER=0` the audio is much steadier, but streaming
+  is slower.
+- **The Series S profile with `VICTORY_OUTPUT=2560x1440` stops at start-up**,
+  on an assert in the title's allocator. Use the default output (gamescope
+  scales it) or the Series X profile.
+- **A few shaders need a wave size of 64**, which NVIDIA cards do not have.
+  Their pipelines are not made, and the draws that need them are dropped.
+- **The picture may look darker under gamescope** than without it. Not looked
+  into yet.
+
+**Running it on Linux:**
+
+```sh
+git clone -b linux-nvidia https://github.com/Tuxinet/VIctory-Tuxinet-Nvidia
+cd VIctory-Tuxinet-Nvidia
+cp victory.example.toml victory.toml        # then set your paths, outside this folder
+XWIN_ACCEPT_LICENSE=1 cargo xwin build --locked --profile diag -p victory \
+    --features diagnostics --target x86_64-pc-windows-msvc
+# vkd3d-proton from its master branch, built into ~/proj/vkd3d-proton/build-x64
+# (Proton's own release lacks fixes this title needs); play.sh copies it into the prefix.
+WINEPREFIX=~/.local/share/victory/prefix/pfx WINE=<Proton>/files/bin/wine winetricks d3dcompiler_47 vcrun2022
+scripts/wine/build-ntdll.sh                 # optional, much faster streaming
+sudo setcap cap_sys_nice+ep ~/.local/share/victory/proton-patched/files/bin/wineserver   # thread priorities
+scripts/play.sh -- shaders <the shader archives>
+scripts/play.sh -- warm --used              # after a run or two: their pipelines ahead of the next
+GAMESCOPE_SCREEN=3440x1440 scripts/play.sh --gamescope --console series-s
+```
+
+Each run's whole log goes to `~/.local/share/victory/logs`. The first
+launches after a shader or driver change compile pipelines for a few minutes.
+NVIDIA's shader cache keeps them for the runs after that.
+
+The rest of this README is upstream's, about Windows and the RX 7900 XTX.
+
 ## The goal
 
 **A stable 30 fps or more without ray tracing, then as high a frame rate and as
